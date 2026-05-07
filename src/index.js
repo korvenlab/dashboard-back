@@ -14,31 +14,43 @@ function firstObject(v) {
   return v && typeof v === "object" && !Array.isArray(v) ? v : {};
 }
 
-async function pullDashboard(label, baseUrl, apiKey, filtros) {
+async function pullDashboard(label, baseUrl, apiKey, filtros, opts = {}) {
   if (!baseUrl || !apiKey) {
     return { ok: false, warn: `${label}: env ausente` };
   }
-  const url = new URL(`${String(baseUrl).replace(/\/+$/, "")}/dashboard`);
-  url.searchParams.set("period_days", String(filtros.period_days));
-  url.searchParams.set("chart_days", String(filtros.chart_days));
-  if (filtros.organization_id) {
-    url.searchParams.set("organization_id", filtros.organization_id);
-  }
+  const path = opts.path ?? "/dashboard";
+  const url = new URL(`${String(baseUrl).replace(/\/+$/, "")}${path}`);
+  const queryMap = opts.queryMap ?? {
+    period_days: "period_days",
+    chart_days: "chart_days",
+    organization_id: "organization_id",
+  };
+  url.searchParams.set(queryMap.period_days, String(filtros.period_days));
+  url.searchParams.set(queryMap.chart_days, String(filtros.chart_days));
+  if (filtros.organization_id) url.searchParams.set(queryMap.organization_id, filtros.organization_id);
 
   try {
+    const headers = {
+      Accept: "application/json",
+      ...(opts.authMode === "admin"
+        ? {
+            Authorization: `Bearer ${apiKey}`,
+            "x-admin-secret": apiKey,
+          }
+        : {
+            Authorization: `Bearer ${apiKey}`,
+            "X-API-Key": apiKey,
+          }),
+    };
     const res = await fetch(url.toString(), {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "X-API-Key": apiKey,
-        Accept: "application/json",
-      },
+      headers,
     });
     const text = await res.text();
     let json = {};
     try {
       json = text ? JSON.parse(text) : {};
     } catch {
-      return { ok: false, warn: `${label}: JSON inválido` };
+      return { ok: false, warn: `${label}: JSON inválido (${text.slice(0, 80)})` };
     }
     if (!res.ok) return { ok: false, warn: `${label}: HTTP ${res.status}` };
     return { ok: true, json };
@@ -109,12 +121,24 @@ app.get("/dashboard", async (req, res) => {
       process.env.WAGOO_API_BASE_URL,
       process.env.WAGOO_METRICS_API_KEY,
       filtros,
+      {
+        path: process.env.WAGOO_DASHBOARD_PATH || "/api/admin/dashboard",
+        queryMap: {
+          period_days: "periodDays",
+          chart_days: "periodDays",
+          organization_id: "organization",
+        },
+        authMode: "admin",
+      },
     ),
     pullDashboard(
       "2AVENDAS",
       process.env.TWO_AVENDAS_API_BASE_URL,
       process.env.TWO_AVENDAS_METRICS_API_KEY,
       filtros,
+      {
+        path: process.env.TWO_AVENDAS_DASHBOARD_PATH || "/dashboard",
+      },
     ),
   ]);
 
