@@ -10,6 +10,11 @@ function toInt(v, d) {
   return Number.isFinite(n) ? n : d;
 }
 
+function toIntInRange(v, d, min, max) {
+  const n = toInt(v, d);
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+
 function firstObject(v) {
   return v && typeof v === "object" && !Array.isArray(v) ? v : {};
 }
@@ -125,14 +130,17 @@ app.get("/health", (_req, res) => {
 app.get("/dashboard", async (req, res) => {
   const filtros = {
     organization_id: typeof req.query.organization_id === "string" ? req.query.organization_id : undefined,
-    period_days: toInt(req.query.period_days, 30),
-    chart_days: toInt(req.query.chart_days, 14),
+    period_days: toIntInRange(req.query.period_days, 30, 1, 366),
+    chart_days: toIntInRange(req.query.chart_days, 14, 1, 90),
   };
 
   const authHeader = req.header("authorization");
-  const bearer = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
-  const incomingKey = req.header("x-api-key") || bearer;
-  const gatewayKey = process.env.DASHBOARD_BACKEND_API_KEY;
+  const bearer =
+    typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")
+      ? authHeader.slice(7).trim()
+      : undefined;
+  const incomingKey = (req.header("x-api-key") ?? bearer ?? "").trim();
+  const gatewayKey = (process.env.DASHBOARD_BACKEND_API_KEY ?? "").trim();
   if (gatewayKey && incomingKey !== gatewayKey) {
     return res.status(401).json({ ok: false, message: "unauthorized" });
   }
