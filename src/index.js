@@ -50,7 +50,16 @@ async function pullDashboard(label, baseUrl, apiKey, filtros, opts = {}) {
     const res = await fetch(url.toString(), {
       headers,
     });
+    const contentType = (res.headers.get("content-type") || "").toLowerCase();
     const text = await res.text();
+    if (!contentType.includes("application/json")) {
+      const hint = `esperado JSON, veio ${contentType || "sem content-type"}`;
+      const preview = text.replace(/\s+/g, " ").slice(0, 80);
+      return {
+        ok: false,
+        warn: `${label}: ${hint}. Verifique API_BASE_URL/path. Preview: ${preview}`,
+      };
+    }
     let json = {};
     try {
       json = text ? JSON.parse(text) : {};
