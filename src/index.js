@@ -59,10 +59,32 @@ async function pullDashboard(label, baseUrl, apiKey, filtros, opts = {}) {
   }
 }
 
-function mergeDashboards(wagooJson, avendasJson, filtros, warnings) {
-  const wagoo = firstObject(wagooJson);
-  const avendas = firstObject(avendasJson);
-  const wagooBlock = firstObject(wagoo.wagoo);
+/**
+ * Série de receita do produto Wagoo (repo wag-backend).
+ * Prefere o payload do wag-backend (chave JSON `wagoo`); se vazio, usa o bloco equivalente
+ * devolvido pela API 2AVendas — repo 2A-back (produto 2AVendas, não “A2”; chaves `waggo` ou `wagoo`).
+ */
+function mergeWagooReceitaBlock(wagBackendPayload, twoAvendasPayload) {
+  const fromWagooApi = firstObject(firstObject(wagBackendPayload).wagoo);
+  const avRoot = firstObject(twoAvendasPayload);
+  const from2AvendasAlias = firstObject(avRoot.waggo);
+  const from2AvendasCanonical = firstObject(avRoot.wagoo);
+  const from2Avendas =
+    Array.isArray(from2AvendasAlias.receita_por_dia) && from2AvendasAlias.receita_por_dia.length
+      ? from2AvendasAlias
+      : from2AvendasCanonical;
+  const wLen = Array.isArray(fromWagooApi.receita_por_dia) ? fromWagooApi.receita_por_dia.length : 0;
+  const aLen = Array.isArray(from2Avendas.receita_por_dia) ? from2Avendas.receita_por_dia.length : 0;
+  if (wLen > 0) return fromWagooApi;
+  if (aLen > 0) return from2Avendas;
+  return { ...from2Avendas, ...fromWagooApi };
+}
+
+/** wagBackendJson = Wagoo (wag-backend). twoAvendasJson = 2AVendas (2A-back). */
+function mergeDashboards(wagBackendJson, twoAvendasJson, filtros, warnings) {
+  const wagoo = firstObject(wagBackendJson);
+  const avendas = firstObject(twoAvendasJson);
+  const wagooBlock = mergeWagooReceitaBlock(wagBackendJson, twoAvendasJson);
   const avendasBlock =
     firstObject(avendas.dois_avendas).volume_por_dia || firstObject(avendas.dois_avendas).kpis
       ? firstObject(avendas.dois_avendas)
@@ -125,14 +147,14 @@ app.get("/dashboard", async (req, res) => {
         path: process.env.WAGOO_DASHBOARD_PATH || "/api/admin/dashboard",
         queryMap: {
           period_days: "periodDays",
-          chart_days: "periodDays",
-          organization_id: "organization",
+          chart_days: "chartDays",
+          organization_id: "organization_id",
         },
         authMode: "admin",
       },
     ),
     pullDashboard(
-      "2AVENDAS",
+      "2AVendas",
       process.env.TWO_AVENDAS_API_BASE_URL,
       process.env.TWO_AVENDAS_METRICS_API_KEY,
       filtros,
