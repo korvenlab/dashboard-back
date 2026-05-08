@@ -19,6 +19,16 @@ function firstObject(v) {
   return v && typeof v === "object" && !Array.isArray(v) ? v : {};
 }
 
+const UPTIMEROBOT_URL = "https://api.uptimerobot.com/v2/getMonitors";
+
+function mapUptimeMonitorStatus(statusCode) {
+  const code = Number(statusCode);
+  if (code === 2) return "Online";
+  if (code === 9) return "Offline";
+  if (code === 0) return "Paused";
+  return "Unknown";
+}
+
 async function pullDashboard(label, baseUrl, apiKey, filtros, opts = {}) {
   if (!baseUrl || !apiKey) {
     return { ok: false, warn: `${label}: env ausente` };
@@ -204,6 +214,94 @@ app.get("/dashboard", async (req, res) => {
     warnings,
   );
   return res.json(merged);
+});
+
+app.get("/monitoring/uptimerobot", async (_req, res) => {
+  const apiKey = (process.env.UPTIMEROBOT_API_KEY ?? "").trim();
+  if (!apiKey) {
+    return res.status(503).json({
+      ok: false,
+      message: "UPTIMEROBOT_API_KEY não configurada no backend.",
+    });
+  }
+
+  try {
+    const body = new URLSearchParams({
+      api_key: apiKey,
+      format: "json",
+      logs: "1",
+      response_times: "1",
+      response_times_limit: "50",
+      custom_uptime_ratios: "1-7-30",
+    });
+
+    const upstream = await fetch(UPTIMEROBOT_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: body.toString(),
+    });
+
+    const contentType = (upstream.headers.get("content-type") || "").toLowerCase();
+    const rawText = await upstream.text();
+    let json = {};
+    try {
+      json = rawText ? JSON.parse(rawText) : {};
+    } catch {
+      json = {};
+    }
+
+    if (!contentType.includes("application/json")) {
+      return res.status(502).json({
+        ok: false,
+        message: "UptimeRobot retornou resposta não-JSON.",
+        upstreamStatus: upstream.status,
+      });
+    }
+
+    if (!upstream.ok) {
+      return res.status(502).json({
+        ok: false,
+        message: `Falha ao consultar UptimeRobot (HTTP ${upstream.status}).`,
+        upstream: json,
+      });
+    }
+
+    const root = firstObject(json);
+    const monitorsRaw = Array.isArray(root.monitors) ? root.monitors : [];
+    const monitors = monitorsRaw.map((item) => {
+      const m = firstObject(item);
+      const statusCode = Number(m.status ?? -1);
+      return {
+        id: m.id ?? null,
+        name: m.friendly_name ?? "Sem nome",
+        url: m.url ?? null,
+        statusCode,
+        status: mapUptimeMonitorStatus(statusCode),
+        type: m.type ?? null,
+        interval: m.interval ?? null,
+        uptimeRatio: m.custom_uptime_ratio ?? m.all_time_uptime_ratio ?? null,
+        createDatetime: m.create_datetime ?? null,
+        logs: Array.isArray(m.logs) ? m.logs : [],
+        responseTimes: Array.isArray(m.response_times) ? m.response_times : [],
+      };
+    });
+
+    return res.json({
+      ok: true,
+      fetchedAt: new Date().toISOString(),
+      stat: root.stat ?? "unknown",
+      total: monitors.length,
+      monitors,
+      raw: root,
+    });
+  } catch (error) {
+    return res.status(502).json({
+      ok: false,
+      message: `Erro ao consultar UptimeRobot: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
 });
 
 const port = Number(process.env.PORT || 3001);
