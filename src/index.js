@@ -132,8 +132,14 @@ function mergeDashboards(wagBackendJson, twoAvendasJson, filtros, warnings) {
   };
 }
 
+const healthPayload = () => ({
+  ok: true,
+  service: "korven-dashboard-backend",
+  timestamp: new Date().toISOString(),
+});
+
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "korven-dashboard-backend" });
+  res.json(healthPayload());
 });
 
 app.get("/dashboard", async (req, res) => {
