@@ -148,6 +148,22 @@ const healthPayload = () => ({
   timestamp: new Date().toISOString(),
 });
 
+/** Mesma chave que protege `GET /dashboard` (Bearer ou X-API-Key). */
+function authorizeDashboardGateway(req, res) {
+  const authHeader = req.header("authorization");
+  const bearer =
+    typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")
+      ? authHeader.slice(7).trim()
+      : undefined;
+  const incomingKey = (req.header("x-api-key") ?? bearer ?? "").trim();
+  const gatewayKey = (process.env.DASHBOARD_BACKEND_API_KEY ?? "").trim();
+  if (gatewayKey && incomingKey !== gatewayKey) {
+    res.status(401).json({ ok: false, message: "unauthorized" });
+    return false;
+  }
+  return true;
+}
+
 app.get("/health", (_req, res) => {
   res.json(healthPayload());
 });
@@ -159,16 +175,7 @@ app.get("/dashboard", async (req, res) => {
     chart_days: toIntInRange(req.query.chart_days, 14, 1, 90),
   };
 
-  const authHeader = req.header("authorization");
-  const bearer =
-    typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")
-      ? authHeader.slice(7).trim()
-      : undefined;
-  const incomingKey = (req.header("x-api-key") ?? bearer ?? "").trim();
-  const gatewayKey = (process.env.DASHBOARD_BACKEND_API_KEY ?? "").trim();
-  if (gatewayKey && incomingKey !== gatewayKey) {
-    return res.status(401).json({ ok: false, message: "unauthorized" });
-  }
+  if (!authorizeDashboardGateway(req, res)) return;
 
   const [wagooPull, avendasPull] = await Promise.all([
     pullDashboard(
