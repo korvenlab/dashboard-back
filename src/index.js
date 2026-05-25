@@ -1,7 +1,18 @@
 import cors from "cors";
 import express from "express";
+import {
+  createTtlCache,
+  dashboardFiltrosKey,
+  DASHBOARD_CACHE_TTL_MS,
+  UPTIMEROBOT_CACHE_TTL_MS,
+} from "./cache.js";
 
 const app = express();
+
+const mergedDashboardCache = createTtlCache(DASHBOARD_CACHE_TTL_MS, 32);
+const wagooUpstreamCache = createTtlCache(DASHBOARD_CACHE_TTL_MS, 32);
+const avendasUpstreamCache = createTtlCache(DASHBOARD_CACHE_TTL_MS, 32);
+const uptimeRobotCache = createTtlCache(UPTIMEROBOT_CACHE_TTL_MS, 4);
 app.use(cors());
 app.use(express.json());
 
@@ -83,6 +94,17 @@ async function pullDashboard(label, baseUrl, apiKey, filtros, opts = {}) {
   }
 }
 
+/** Reutiliza resposta upstream em cache (só sucesso HTTP). */
+async function pullDashboardCached(cache, cacheLabel, label, baseUrl, apiKey, filtros, opts = {}) {
+  const key = `${cacheLabel}:${dashboardFiltrosKey(filtros)}`;
+  const hit = cache.get(key);
+  if (hit) return { ...hit, fromCache: true };
+
+  const result = await pullDashboard(label, baseUrl, apiKey, filtros, opts);
+  if (result.ok) cache.set(key, result);
+  return { ...result, fromCache: false };
+}
+
 /**
  * Série de receita do produto Wagoo (repo wag-backend).
  * Prefere o payload do wag-backend (chave JSON `wagoo`); se vazio, usa o bloco equivalente
@@ -142,6 +164,13 @@ function mergeDashboards(wagBackendJson, twoAvendasJson, filtros, warnings) {
   };
 }
 
+function withCacheMeta(payload, meta) {
+  return {
+    ...payload,
+    cache: meta,
+  };
+}
+
 const healthPayload = () => ({
   ok: true,
   service: "korven-dashboard-backend",
@@ -177,8 +206,27 @@ app.get("/dashboard", async (req, res) => {
 
   if (!authorizeDashboardGateway(req, res)) return;
 
+  const forceRefresh =
+    req.query.refresh === "1" || String(req.header("x-korven-refresh") ?? "").trim() === "1";
+  const cacheKey = dashboardFiltrosKey(filtros);
+
+  if (!forceRefresh) {
+    const cachedMerged = mergedDashboardCache.get(cacheKey);
+    if (cachedMerged) {
+      res.setHeader("X-Korven-Cache", "HIT");
+      return res.json(
+        withCacheMeta(cachedMerged, {
+          hit: true,
+          ttl_seconds: Math.round(mergedDashboardCache.ttlMs / 1000),
+        }),
+      );
+    }
+  }
+
   const [wagooPull, avendasPull] = await Promise.all([
-    pullDashboard(
+    pullDashboardCached(
+      wagooUpstreamCache,
+      "wagoo",
       "Wagoo",
       process.env.WAGOO_API_BASE_URL,
       process.env.WAGOO_METRICS_API_KEY,
@@ -193,7 +241,9 @@ app.get("/dashboard", async (req, res) => {
         authMode: "admin",
       },
     ),
-    pullDashboard(
+    pullDashboardCached(
+      avendasUpstreamCache,
+      "2avendas",
       "2AVendas",
       process.env.TWO_AVENDAS_API_BASE_URL,
       process.env.TWO_AVENDAS_METRICS_API_KEY,
@@ -220,10 +270,24 @@ app.get("/dashboard", async (req, res) => {
     filtros,
     warnings,
   );
-  return res.json(merged);
+  const cachedAt = new Date().toISOString();
+  mergedDashboardCache.set(cacheKey, merged);
+
+  res.setHeader("X-Korven-Cache", "MISS");
+  return res.json(
+    withCacheMeta(merged, {
+      hit: false,
+      ttl_seconds: Math.round(mergedDashboardCache.ttlMs / 1000),
+      cached_at: cachedAt,
+      upstream: {
+        wagoo: wagooPull.fromCache ? "HIT" : "MISS",
+        "2avendas": avendasPull.fromCache ? "HIT" : "MISS",
+      },
+    }),
+  );
 });
 
-app.get("/monitoring/uptimerobot", async (_req, res) => {
+app.get("/monitoring/uptimerobot", async (req, res) => {
   const apiKey = (process.env.UPTIMEROBOT_API_KEY ?? "").trim();
   if (!apiKey) {
     return res.status(503).json({
@@ -232,15 +296,41 @@ app.get("/monitoring/uptimerobot", async (_req, res) => {
     });
   }
 
+  const forceRefresh =
+    req.query.refresh === "1" || String(req.header("x-korven-refresh") ?? "").trim() === "1";
+  const includeHeavy =
+    req.query.full === "1" || String(req.header("x-korven-uptime-full") ?? "").trim() === "1";
+
+  if (!forceRefresh) {
+    const cacheKey = includeHeavy ? "uptime:full" : "uptime:lite";
+    const cached = uptimeRobotCache.get(cacheKey);
+    if (cached) {
+      res.setHeader("X-Korven-Cache", "HIT");
+      return res.json({
+        ...cached,
+        cache: {
+          hit: true,
+          ttl_seconds: Math.round(uptimeRobotCache.ttlMs / 1000),
+          mode: includeHeavy ? "full" : "lite",
+        },
+      });
+    }
+  }
+
   try {
     const body = new URLSearchParams({
       api_key: apiKey,
       format: "json",
-      logs: "1",
-      response_times: "1",
-      response_times_limit: "50",
       custom_uptime_ratios: "1-7-30",
     });
+    if (includeHeavy) {
+      body.set("logs", "1");
+      body.set("response_times", "1");
+      body.set("response_times_limit", "20");
+    } else {
+      body.set("logs", "0");
+      body.set("response_times", "0");
+    }
 
     const upstream = await fetch(UPTIMEROBOT_URL, {
       method: "POST",
@@ -295,14 +385,22 @@ app.get("/monitoring/uptimerobot", async (_req, res) => {
       };
     });
 
-    return res.json({
+    const payload = {
       ok: true,
       fetchedAt: new Date().toISOString(),
       stat: root.stat ?? "unknown",
       total: monitors.length,
       monitors,
-      raw: root,
-    });
+      ...(includeHeavy ? { raw: root } : {}),
+      cache: {
+        hit: false,
+        ttl_seconds: Math.round(uptimeRobotCache.ttlMs / 1000),
+        mode: includeHeavy ? "full" : "lite",
+      },
+    };
+    uptimeRobotCache.set(includeHeavy ? "uptime:full" : "uptime:lite", payload);
+    res.setHeader("X-Korven-Cache", "MISS");
+    return res.json(payload);
   } catch (error) {
     return res.status(502).json({
       ok: false,
