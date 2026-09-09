@@ -14,7 +14,13 @@ Deno.serve(async (req) => {
     if (!Number.isFinite(timestampMs) || Math.abs(Date.now() - timestampMs) > 300_000) throw new HttpError(401, "timestamp outside replay window");
     const { raw, body } = await parseJson(req);
     const secretName = product === "wagoo" ? "WAGOO_INGEST_SECRET" : "TWO_AVENDAS_INGEST_SECRET";
-    const secret = Deno.env.get(secretName)?.trim();
+    const admin = adminClient();
+    let secret = Deno.env.get(secretName)?.trim();
+    if (!secret) {
+      const { data, error } = await admin.rpc("get_control_plane_secret", { p_name: secretName });
+      if (error) throw error;
+      secret = typeof data === "string" ? data.trim() : undefined;
+    }
     if (!secret) throw new HttpError(503, `${secretName} is not configured`);
     const expected = await hmacHex(secret, `${timestamp}.${raw}`);
     if (!timingSafeEqual(expected, signature)) throw new HttpError(401, "invalid signature");
@@ -26,7 +32,6 @@ Deno.serve(async (req) => {
     if (Number.isNaN(occurredAt.valueOf())) throw new HttpError(400, "occurred_at is invalid");
     const user = body.user && typeof body.user === "object" && !Array.isArray(body.user) ? body.user as Record<string, unknown> : body;
 
-    const admin = adminClient();
     const productRow = await getProduct(admin, product);
     const { data: existing } = await admin.from("user_activity_events").select("id").eq("product_id", productRow.id).eq("event_id", eventId).maybeSingle();
     if (existing) return json({ ok: true, duplicate: true, event_id: eventId });
