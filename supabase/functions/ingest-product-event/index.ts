@@ -14,8 +14,10 @@ Deno.serve(async (req) => {
     if (!Number.isFinite(timestampMs) || Math.abs(Date.now() - timestampMs) > 300_000) throw new HttpError(401, "timestamp outside replay window");
     const { raw, body } = await parseJson(req);
     const secretName = product === "wagoo" ? "WAGOO_INGEST_SECRET" : "TWO_AVENDAS_INGEST_SECRET";
-    const expected = await hmacHex(Deno.env.get(secretName) ?? "", `${timestamp}.${raw}`);
-    if (!Deno.env.get(secretName) || !timingSafeEqual(expected, signature)) throw new HttpError(401, "invalid signature");
+    const secret = Deno.env.get(secretName)?.trim();
+    if (!secret) throw new HttpError(503, `${secretName} is not configured`);
+    const expected = await hmacHex(secret, `${timestamp}.${raw}`);
+    if (!timingSafeEqual(expected, signature)) throw new HttpError(401, "invalid signature");
 
     const eventId = stringField(body, "event_id", { required: true, max: 255 })!;
     const eventType = stringField(body, "event_type", { required: true, max: 100 })!;
