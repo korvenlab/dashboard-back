@@ -1,0 +1,30 @@
+project_id = "korven-dashboard"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[functions.ingest-product-event]
+verify_jwt = false
+
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.admin-command]
+verify_jwt = true
+
+[functions.access-link]
+verify_jwt = true
+
+[functions.reconcile]
+verify_jwt = false
