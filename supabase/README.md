@@ -5,7 +5,9 @@ Esta pasta adiciona o novo plano de dados sem remover ou alterar o gateway Expre
 ## Componentes
 
 - `migrations/`: schema, índices, RLS, views/RPC, Realtime e seeds `wagoo`/`2avendas`.
-- `functions/ingest-product-event`: ingestão HMAC idempotente de eventos dos produtos.
+- `functions/ingest-product-event`: ingestão HMAC idempotente de eventos dos produtos
+  (Stripe + Mercado Pago; `admin.event` vira notificação; pagamentos entram em `payment_events`
+  e no sino).
 - `functions/stripe-webhook`: recepção e validação nativa de webhooks Stripe.
 - `functions/admin-command`: comandos administrativos autenticados.
 - `functions/access-link`: links `promo`/`complimentary` (Wagoo nunca usa trial).
