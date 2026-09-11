@@ -1,5 +1,5 @@
 /**
- * Cache TTL em memória (por instância Render). Reduz chamadas a wag-backend e 2A-back.
+ * Cache TTL em memória (por instância). Reduz chamadas a wag-backend e 2A-back.
  * TTL configurável via env; reinício do serviço limpa o cache.
  */
 
